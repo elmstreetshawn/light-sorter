@@ -1,0 +1,74 @@
+name: Build Mac app
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest       # Apple Silicon (M1/M2/M3/M4)
+            arch: AppleSilicon
+          - runner: macos-15-intel     # older Intel Macs
+            arch: Intel
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install pillow pillow-heif pyinstaller
+
+      - name: Build the app
+        run: |
+          pyinstaller --noconfirm --windowed --argv-emulation \
+            --name "Light Sorter" \
+            --osx-bundle-identifier com.lightsorter.app \
+            --collect-all pillow_heif \
+            light_sorter.py
+          # Ad-hoc sign so macOS doesn't call it "damaged"
+          codesign --force --deep --sign - "dist/Light Sorter.app"
+
+      - name: Make the DMG
+        run: |
+          mkdir dmg
+          cp -R "dist/Light Sorter.app" dmg/
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname "Light Sorter" -srcfolder dmg \
+            -ov -format UDZO "LightSorter-${{ matrix.arch }}.dmg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LightSorter-${{ matrix.arch }}
+          path: LightSorter-${{ matrix.arch }}.dmg
+
+  release:
+    needs: build
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Publish to the Releases page
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Light Sorter
+          make_latest: true
+          files: out/*.dmg
+          body: |
+            **Which one do I download?**  Apple menu  → About This Mac.
+            - Chip says "Apple M…" → **LightSorter-AppleSilicon.dmg**
+            - Processor says "Intel" → **LightSorter-Intel.dmg**
